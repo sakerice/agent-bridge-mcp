@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -160,6 +160,61 @@ describe("JobManager", () => {
     } finally {
       delete process.env.FAKE_MODE;
     }
+  });
+
+  function writeRawJob(
+    m: JobManager,
+    overrides: Partial<{
+      runnerPid: number;
+      startedAt: string;
+      timeoutMinutes: number;
+    }>,
+  ): string {
+    const jobsDir = (m as unknown as { opts: { jobsDir: string } }).opts
+      .jobsDir;
+    const id = `${Date.now().toString(36)}-deadbeef`;
+    const dir = path.join(jobsDir, id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "meta.json"),
+      JSON.stringify({
+        id,
+        target: "claude",
+        prompt: "x",
+        cwd: os.tmpdir(),
+        runnerPid: -1,
+        startedAt: new Date().toISOString(),
+        timeoutMinutes: 30,
+        ...overrides,
+      }),
+    );
+    return id;
+  }
+
+  it("runnerPid=-1のジョブはstatus()でfailedになりcancel()はkillせず例外を投げる", () => {
+    const m = makeManager();
+    const id = writeRawJob(m, { runnerPid: -1 });
+    expect(m.status(id).state).toBe("failed");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      expect(() => m.cancel(id)).toThrow();
+      expect(killSpy).not.toHaveBeenCalled();
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it("開始から(timeoutMinutes+猶予)を過ぎてpidが生きていてもfailed扱いになる(PID再利用対策)", () => {
+    const m = makeManager();
+    const staleStartedAt = new Date(
+      Date.now() - 60 * 60_000, // 60分前
+    ).toISOString();
+    const id = writeRawJob(m, {
+      runnerPid: process.pid, // 自プロセス=常にalive
+      startedAt: staleStartedAt,
+      timeoutMinutes: 1,
+    });
+    expect(m.status(id).state).toBe("failed");
   });
 
   it("listはstartedAt降順で返す", async () => {

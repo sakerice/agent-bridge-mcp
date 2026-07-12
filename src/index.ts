@@ -78,8 +78,13 @@ server.registerTool(
       timeout_minutes: z
         .number()
         .positive()
+        .max(10080)
         .optional()
-        .describe("タイムアウト(分)。デフォルト30"),
+        .describe(
+          "タイムアウト(分)。デフォルト30。上限10080分(7日)。" +
+            "これを超えると内部のsetTimeout遅延がInt32範囲(約24.8日)をオーバーフローし、" +
+            "意図せず即time_outする恐れがあるため上限を設けている",
+        ),
     },
   },
   async ({ target, prompt, cwd, model, timeout_minutes }) => {

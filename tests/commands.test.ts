@@ -16,6 +16,7 @@ describe("buildCommand", () => {
       { target: "codex", prompt: "fix bug", cwd: "/tmp/proj" },
       "/tmp/job1",
       bins,
+      1,
     );
     expect(cmd.bin).toBe("/bin/codex");
     expect(cmd.args).toEqual([
@@ -24,9 +25,23 @@ describe("buildCommand", () => {
       "-C", "/tmp/proj",
       "-s", "workspace-write",
       "--skip-git-repo-check",
+      "-c", 'mcp_servers.agent-bridge.env.AGENT_BRIDGE_DEPTH="1"',
       "-o", path.join("/tmp/job1", LAST_MESSAGE_FILE),
       "fix bug",
     ]);
+  });
+
+  it("codexにchildDepthをTOMLオーバーライドの-cとして渡す", () => {
+    const cmd = buildCommand(
+      { target: "codex", prompt: "p", cwd: "/tmp", model: "gpt-5.6-sol" },
+      "/tmp/job1",
+      bins,
+      2,
+    );
+    expect(cmd.args).toContain("-c");
+    expect(cmd.args[cmd.args.indexOf("-c") + 1]).toBe(
+      'mcp_servers.agent-bridge.env.AGENT_BRIDGE_DEPTH="2"',
+    );
   });
 
   it("codexでmodel指定を渡す", () => {
@@ -34,6 +49,7 @@ describe("buildCommand", () => {
       { target: "codex", prompt: "p", cwd: "/tmp", model: "gpt-5.6-sol" },
       "/tmp/job1",
       bins,
+      1,
     );
     expect(cmd.args).toContain("-m");
     expect(cmd.args[cmd.args.indexOf("-m") + 1]).toBe("gpt-5.6-sol");
@@ -45,6 +61,7 @@ describe("buildCommand", () => {
       { target: "claude", prompt: "review this", cwd: "/tmp/proj" },
       "/tmp/job1",
       bins,
+      1,
     );
     expect(cmd.bin).toBe("/bin/claude");
     expect(cmd.args).toEqual([
@@ -59,6 +76,7 @@ describe("buildCommand", () => {
       { target: "claude", prompt: "p", cwd: "/tmp", model: "claude-sonnet-5" },
       "/tmp/job1",
       bins,
+      1,
     );
     expect(cmd.args).toContain("--model");
     expect(cmd.args[cmd.args.indexOf("--model") + 1]).toBe("claude-sonnet-5");

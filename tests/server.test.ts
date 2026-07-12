@@ -108,6 +108,19 @@ describe("agent-bridge MCP server", () => {
     expect((res as { isError?: boolean }).isError).toBe(true);
   });
 
+  it("timeout_minutesが上限(10080分)を超えるとisErrorで拒否する", async () => {
+    const res = await client.callTool({
+      name: "delegate_task",
+      arguments: {
+        target: "claude",
+        prompt: "x",
+        cwd: os.tmpdir(),
+        timeout_minutes: 999999999,
+      },
+    });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+  });
+
   it("不明なjob_idはisErrorを返す", async () => {
     const res = await client.callTool({
       name: "job_status",

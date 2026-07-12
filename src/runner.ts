@@ -55,12 +55,16 @@ const child = spawn(spec.bin, spec.args, {
 
 let overrideState: "cancelled" | "timed_out" | undefined;
 
+// setTimeoutの遅延はInt32(2^31-1ms、約24.8日)を超えるとオーバーフローして
+// ほぼ即発火してしまうため、上流でのバリデーション漏れに備えてここでもclampする。
+const timeoutMs = Math.min(spec.timeoutMs, 2 ** 31 - 1);
+
 const timer = setTimeout(() => {
   if (overrideState === undefined) {
     overrideState = "timed_out";
   }
   child.kill("SIGKILL");
-}, spec.timeoutMs);
+}, timeoutMs);
 
 process.on("SIGTERM", () => {
   clearTimeout(timer);

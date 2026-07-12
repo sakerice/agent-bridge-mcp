@@ -26,6 +26,7 @@ export function buildCommand(
   spec: DelegateSpec,
   jobDir: string,
   bins: Bins,
+  childDepth: number,
 ): Command {
   if (spec.target === "codex") {
     const args = [
@@ -34,6 +35,10 @@ export function buildCommand(
       "-C", spec.cwd,
       "-s", "workspace-write",
       "--skip-git-repo-check",
+      // Codex CLIは内蔵MCPサーバーに渡すenvを不透明にサニタイズし得るため、
+      // AGENT_BRIDGE_DEPTH の伝播をプロセスenvだけに頼らず、
+      // -c (TOMLオーバーライド)経由でも明示的に上書きする。
+      "-c", `mcp_servers.agent-bridge.env.AGENT_BRIDGE_DEPTH="${childDepth}"`,
       "-o", path.join(jobDir, LAST_MESSAGE_FILE),
     ];
     if (spec.model) args.push("-m", spec.model);

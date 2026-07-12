@@ -54,6 +54,7 @@ function tail(file: string): string {
 }
 
 function pidAlive(pid: number): boolean {
+  if (pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -61,6 +62,8 @@ function pidAlive(pid: number): boolean {
     return false;
   }
 }
+
+const STALE_GRACE_MS = 5 * 60_000;
 
 export class JobManager {
   constructor(private opts: JobManagerOptions) {}
@@ -75,7 +78,7 @@ export class JobManager {
     const jobDir = path.join(this.opts.jobsDir, id);
     fs.mkdirSync(jobDir, { recursive: true });
 
-    const cmd = buildCommand(spec, jobDir, this.opts.bins);
+    const cmd = buildCommand(spec, jobDir, this.opts.bins, this.opts.depth + 1);
     const timeoutMinutes = spec.timeoutMinutes ?? 30;
     fs.writeFileSync(
       path.join(jobDir, "job.json"),
@@ -98,13 +101,34 @@ export class JobManager {
     });
     runner.unref();
 
+    const runnerPid = runner.pid ?? -1;
+    if (runnerPid <= 0) {
+      // spawnがpidを取得できなかった(起動失敗)。runnerPid=-1は
+      // process.kill(-1, ...)がプロセスグループ全体を対象にしてしまう危険な
+      // センチネルなので、result.jsonを先に書いてstateOf()がresult.json優先で
+      // failedを返すようにし、"running"のまま取り残されないようにする。
+      fs.writeFileSync(
+        path.join(jobDir, "result.json"),
+        JSON.stringify(
+          {
+            state: "failed",
+            exitCode: null,
+            signal: null,
+            endedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        ),
+      );
+    }
+
     const meta: JobMeta = {
       id,
       target: spec.target,
       prompt: spec.prompt,
       cwd: spec.cwd,
       model: spec.model,
-      runnerPid: runner.pid ?? -1,
+      runnerPid,
       startedAt: new Date().toISOString(),
       timeoutMinutes,
     };
@@ -143,7 +167,20 @@ export class JobManager {
     const result = this.readResult(id);
     if (result) return { state: result.state, exitCode: result.exitCode };
     const meta = this.readMeta(id);
-    if (pidAlive(meta.runnerPid)) return { state: "running", exitCode: null };
+    if (pidAlive(meta.runnerPid)) {
+      // ランナー自身がtimeoutMsを強制するため、正当なランナーはこの猶予期限を
+      // 超えて生き残ることはない。超えていればOS再起動やPID再利用により
+      // 無関係なプロセスを指している可能性が高いのでfailed扱いにする
+      // (cancel()が無関係なプロセスにSIGTERMを送るのを防ぐ)。
+      const deadline =
+        new Date(meta.startedAt).getTime() +
+        meta.timeoutMinutes * 60_000 +
+        STALE_GRACE_MS;
+      if (Date.now() > deadline) {
+        return { state: "failed", exitCode: null };
+      }
+      return { state: "running", exitCode: null };
+    }
     // ランナーがresult.jsonを書かずに死んだ(クラッシュ等)
     return { state: "failed", exitCode: null };
   }
@@ -178,6 +215,12 @@ export class JobManager {
 
   cancel(id: string): void {
     const meta = this.readMeta(id);
+    // 多重防御: runnerPidが不正(<=0)な場合は絶対にkillを呼ばない。
+    // stateOf()がすでにこのケースをfailed扱いにするため実際には下のチェックで
+    // 弾かれるはずだが、pid<=0でのkill呼び出し自体を明示的に禁止しておく。
+    if (meta.runnerPid <= 0) {
+      throw new Error("ジョブは実行中ではありません(state: failed)");
+    }
     const { state } = this.stateOf(id);
     if (state !== "running") {
       throw new Error(`ジョブは実行中ではありません(state: ${state})`);
