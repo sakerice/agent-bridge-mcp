@@ -20,9 +20,29 @@ if (!jobDir) {
   process.exit(2);
 }
 
-const spec: JobSpec = JSON.parse(
-  fs.readFileSync(path.join(jobDir, "job.json"), "utf8"),
-);
+let spec: JobSpec;
+try {
+  spec = JSON.parse(
+    fs.readFileSync(path.join(jobDir, "job.json"), "utf8"),
+  );
+} catch (e) {
+  try {
+    fs.writeFileSync(path.join(jobDir, "stderr.log"), String(e), { flag: "a" });
+    fs.writeFileSync(
+      path.join(jobDir, "result.json"),
+      JSON.stringify({
+        state: "failed",
+        exitCode: null,
+        signal: null,
+        endedAt: new Date().toISOString(),
+      }),
+    );
+  } catch (writeErr) {
+    console.error("Failed to write error result:", writeErr);
+    process.exit(1);
+  }
+  process.exit(0);
+}
 
 const out = fs.openSync(path.join(jobDir, "output.log"), "a");
 const err = fs.openSync(path.join(jobDir, "stderr.log"), "a");
@@ -36,11 +56,14 @@ const child = spawn(spec.bin, spec.args, {
 let overrideState: "cancelled" | "timed_out" | undefined;
 
 const timer = setTimeout(() => {
-  overrideState = "timed_out";
+  if (overrideState === undefined) {
+    overrideState = "timed_out";
+  }
   child.kill("SIGKILL");
 }, spec.timeoutMs);
 
 process.on("SIGTERM", () => {
+  clearTimeout(timer);
   overrideState = "cancelled";
   child.kill("SIGTERM");
   // 猶予後も生きていたら強制kill

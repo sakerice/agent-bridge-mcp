@@ -78,4 +78,13 @@ describe("runner", () => {
     const result = await waitForResult(jobDir);
     expect(result.state).toBe("failed");
   });
+
+  it("job.json が無効な JSON のとき result.json に failed を記録する", async () => {
+    const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), "abm-run-"));
+    fs.writeFileSync(path.join(jobDir, "job.json"), "not json");
+    runRunner(jobDir);
+    const result = await waitForResult(jobDir);
+    expect(result.state).toBe("failed");
+    expect(result.exitCode).toBeNull();
+  });
 });
