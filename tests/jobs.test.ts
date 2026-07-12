@@ -133,6 +133,16 @@ describe("JobManager", () => {
     expect(() => m.cancel("nope")).toThrow(JobNotFoundError);
   });
 
+  it("パストラバーサルはJobNotFoundErrorで拒否される", () => {
+    const m = makeManager();
+    // Various path traversal attempts
+    expect(() => m.status("../../etc")).toThrow(JobNotFoundError);
+    expect(() => m.result("../../../passwd")).toThrow(JobNotFoundError);
+    expect(() => m.cancel("a/b")).toThrow(JobNotFoundError);
+    expect(() => m.status("..\\..\\windows")).toThrow(JobNotFoundError);
+    expect(() => m.status("./etc/passwd")).toThrow(JobNotFoundError);
+  });
+
   it("未完了ジョブのresultはstate: runningを返す", async () => {
     const m = makeManager();
     process.env.FAKE_MODE = "sleep";

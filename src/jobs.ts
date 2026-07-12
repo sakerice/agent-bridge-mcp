@@ -116,6 +116,10 @@ export class JobManager {
   }
 
   private jobDir(id: string): string {
+    // Validate job ID format to prevent path traversal
+    if (!/^[a-z0-9]+-[a-f0-9]{8}$/.test(id)) {
+      throw new JobNotFoundError(`job_id が見つかりません: ${id}`);
+    }
     const dir = path.join(this.opts.jobsDir, id);
     if (!fs.existsSync(path.join(dir, "meta.json"))) {
       throw new JobNotFoundError(`job_id が見つかりません: ${id}`);
