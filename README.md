@@ -137,7 +137,7 @@ codex mcp list
 | 変数 | 説明 | デフォルト |
 |---|---|---|
 | `AGENT_BRIDGE_JOBS_DIR` | ジョブの永続化ディレクトリ | `~/.agent-bridge/jobs` |
-| `AGENT_BRIDGE_CLAUDE_BIN` | `claude` バイナリのパス | `/opt/homebrew/bin/claude` があればそれ、なければ `/opt/homebrew/bin/claude`(フォールバック) |
+| `AGENT_BRIDGE_CLAUDE_BIN` | `claude` バイナリのパス | 環境変数が未設定なら `/opt/homebrew/bin/claude` の存在を確認して使用し、それも無ければ同じ `/opt/homebrew/bin/claude` をハードコードされた最終フォールバックとして使う(結果的に常にこのパスになる) |
 | `AGENT_BRIDGE_CODEX_BIN` | `codex` バイナリのパス | `/opt/homebrew/bin/codex` があればそれ、なければ `/Applications/ChatGPT.app/Contents/Resources/codex`(フォールバック) |
 | `AGENT_BRIDGE_DEPTH` | 現在の委譲の深さ(通常は自分で設定しない。委譲時にサーバーが `+1` して子プロセスに渡す) | `0` |
 
@@ -150,6 +150,27 @@ codex mcp list
 `AGENT_BRIDGE_DEPTH` を「現在の深さ+1」に設定して渡す(`src/jobs.ts` の `delegate()`)。
 これにより、Claude→Codex→Claude→… のように委譲が連鎖しても、一定回数(深さ2)を超えると
 自動的に打ち切られ、無限委譲ループによるリソース枯渇を防ぐ。
+
+**codex向けの深さ伝播はenvだけに頼らない**: Codex CLI は内蔵MCPサーバー(agent-bridgeを含む)を
+起動する際、渡す環境変数をサニタイズしている可能性があり、その場合子プロセスのenvに設定した
+`AGENT_BRIDGE_DEPTH` が握りつぶされ、委譲先のagent-bridgeが深さ0から再スタートしてしまう
+(=深さ制限が効かず無限委譲ループになり得る)。これを防ぐため、`target: "codex"` のコマンド構築時
+(`src/commands.ts` の `buildCommand()`)には envに加えて `-c
+mcp_servers.agent-bridge.env.AGENT_BRIDGE_DEPTH="<次の深さ>"` というCodex CLIの設定オーバーライド
+引数(`-c` の値はTOMLとしてパースされる)も明示的に渡し、env経由の伝播が効かない環境でも深さが
+確実に伝わるようにしている。`claude` 側には同等のオーバーライド機構が無いため、従来通りenv経由の
+伝播のみとなる(claude CLIでのenv伝播は動作確認済み)。
+
+> **注意(検証未了)**: 上記の `-c` オーバーライドがCodex CLI側で実際にMCPサーバーへのenv値として
+> 反映されるかどうかは、対話モードでの実機検証がまだ完了していない。`codex exec`(非対話実行)は
+> MCPツール呼び出しの承認フローが構造的にサポートされていないため(下記トラブルシュート参照)、
+> `codex exec` 経由では本項目を検証できない。対話セッションでの確認手順は以下の通り:
+>
+> ```bash
+> AGENT_BRIDGE_DEPTH=2 codex
+> # 対話セッション内で delegate_task を呼び出してもらい、
+> # 「再委譲の深さ制限(AGENT_BRIDGE_DEPTH=2)に達しました」エラーになることを確認する
+> ```
 
 手動で深さ制限を早めに発動させたい場合(動作確認など)は、以下のように環境変数を明示して
 呼び出し元セッションを起動する。
@@ -186,4 +207,4 @@ npm test
 ```
 
 fakeバイナリ(テスト用のダミー `claude`/`codex` スクリプト)を使ったユニットテストで、
-ジョブのライフサイクル・深さ制限・タイムアウト・エラー処理などを検証している(31/31 pass)。
+ジョブのライフサイクル・深さ制限・タイムアウト・エラー処理などを検証している(35/35 pass)。
