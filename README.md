@@ -140,6 +140,16 @@ codex mcp list
 | `AGENT_BRIDGE_CLAUDE_BIN` | `claude` バイナリのパス | 環境変数が未設定なら `/opt/homebrew/bin/claude` の存在を確認して使用し、それも無ければ同じ `/opt/homebrew/bin/claude` をハードコードされた最終フォールバックとして使う(結果的に常にこのパスになる) |
 | `AGENT_BRIDGE_CODEX_BIN` | `codex` バイナリのパス | `/opt/homebrew/bin/codex` があればそれ、なければ `/Applications/ChatGPT.app/Contents/Resources/codex`(フォールバック) |
 | `AGENT_BRIDGE_DEPTH` | 現在の委譲の深さ(通常は自分で設定しない。委譲時にサーバーが `+1` して子プロセスに渡す) | `0` |
+| `AGENT_BRIDGE_MODEL_GUIDE_FILE` | モデル選定ガイドのファイルパス | `~/.agent-bridge/model-guide.md`(無ければ内蔵デフォルト) |
+
+## モデル運用
+
+`delegate_task` のツール説明には**モデル選定ガイド**が埋め込まれており、委譲する側のAI(オーケストレータ)は委譲前にこれを読む。ポリシーは次の通り:
+
+- **model未指定 = 各CLIの既定(最高位モデル)で実行**。これは意図的な仕様(既定は安全側=能力優先)。
+- ただしオーケストレータには「ワーカー仕事なら下位/専用モデルで十分か検討し、**どのモデルを使うかユーザーに確認**してから委譲せよ」と指示している。無駄な高位モデル消費を確認一回で防ぐ。
+- ガイドの内容(2026-07-13時点: claude-fable-5/opus-4-8/sonnet-5/haiku-4-5、gpt-5.6-sol/5.6-terra/gpt-image-2)は陳腐化しうるため、オーケストレータは自身の知識と乖離があればユーザーにガイド更新を提案する。
+- ガイドを差し替えるには `~/.agent-bridge/model-guide.md` を置く(または `AGENT_BRIDGE_MODEL_GUIDE_FILE` でパス指定)。サーバー起動時(=セッション開始時)に読み込まれる。
 
 ## 深さ制限の説明
 

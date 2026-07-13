@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadModelGuide } from "./model-guide.js";
 import {
   JobManager,
   DepthLimitError,
@@ -65,11 +66,21 @@ function withJobErrors<A, R>(fn: (args: A) => R) {
   };
 }
 
+const delegateDescription = [
+  "タスクをもう一方のAIエージェント(claude/codex)に非同期で委譲する。即座にjob_idを返す。進捗はjob_status、結果はjob_resultで回収する。",
+  "",
+  "## モデル運用ポリシー(委譲前に必ず読むこと)",
+  "- model未指定の委譲は各CLIの既定=最高位モデルで実行され、トークンコストが高い。",
+  "- 委譲前に、このタスクがワーカー仕事(定型実装・変換・調査・画像生成など)なら下位/専用モデルで十分でないか検討し、どのモデルを使うか**ユーザーに確認**してから委譲すること。ユーザーが既に指定済み、または過去に方針を明示している場合は再確認不要。",
+  "- 下記ガイドは古くなっている可能性がある。確認の際、あなたの知る最新のモデルラインナップと乖離があればユーザーにガイドの更新(~/.agent-bridge/model-guide.md)を提案すること。",
+  "",
+  loadModelGuide(),
+].join("\n");
+
 server.registerTool(
   "delegate_task",
   {
-    description:
-      "タスクをもう一方のAIエージェント(claude/codex)に非同期で委譲する。即座にjob_idを返す。進捗はjob_status、結果はjob_resultで回収する。",
+    description: delegateDescription,
     inputSchema: {
       target: z.enum(["claude", "codex"]).describe("委譲先エージェント"),
       prompt: z.string().min(1).describe("委譲するタスクの指示文"),

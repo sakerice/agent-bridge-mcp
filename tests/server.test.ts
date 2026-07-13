@@ -189,4 +189,29 @@ describe("agent-bridge MCP server", () => {
     });
     expect((res as { isError?: boolean }).isError).toBe(true);
   });
+
+  it("delegate_taskの説明にモデル選定ガイドとユーザー確認指示を含む", async () => {
+    const tools = await client.listTools();
+    const delegate = tools.tools.find((t) => t.name === "delegate_task");
+    expect(delegate?.description).toContain("モデル選定ガイド");
+    expect(delegate?.description).toContain("ユーザーに確認");
+    expect(delegate?.description).toContain("gpt-5.6-terra");
+    expect(delegate?.description).toContain("claude-sonnet-5");
+  });
+
+  it("AGENT_BRIDGE_MODEL_GUIDE_FILEでガイドを差し替えられる", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "abm-guide-"));
+    const guidePath = path.join(dir, "model-guide.md");
+    fs.writeFileSync(guidePath, "カスタム: worker-model-zzz を使う");
+    const { client: guideClient } = await spawnClient({
+      AGENT_BRIDGE_MODEL_GUIDE_FILE: guidePath,
+    });
+    try {
+      const tools = await guideClient.listTools();
+      const delegate = tools.tools.find((t) => t.name === "delegate_task");
+      expect(delegate?.description).toContain("worker-model-zzz");
+    } finally {
+      await guideClient.close();
+    }
+  });
 });
