@@ -99,8 +99,8 @@ codex --version
 ### Step 2: ビルドして Claude Code に登録
 
 ```bash
-cd /Users/nariiwa/Projects/agent-bridge-mcp && npm run build
-claude mcp add --scope user agent-bridge -- node /Users/nariiwa/Projects/agent-bridge-mcp/dist/index.js
+cd <クローン先>/agent-bridge-mcp && npm run build
+claude mcp add --scope user agent-bridge -- node <クローン先>/agent-bridge-mcp/dist/index.js
 claude mcp list
 ```
 
@@ -113,7 +113,7 @@ claude mcp list
 ```toml
 [mcp_servers.agent-bridge]
 command = "node"
-args = ["/Users/nariiwa/Projects/agent-bridge-mcp/dist/index.js"]
+args = ["<クローン先>/agent-bridge-mcp/dist/index.js"]
 ```
 
 手で編集する代わりに、CLI が対応していれば以下でも同じ結果になる(既存の `config.toml` は
@@ -121,7 +121,7 @@ args = ["/Users/nariiwa/Projects/agent-bridge-mcp/dist/index.js"]
 
 ```bash
 cp ~/.codex/config.toml ~/.codex/config.toml.bak-agent-bridge
-codex mcp add agent-bridge -- node /Users/nariiwa/Projects/agent-bridge-mcp/dist/index.js
+codex mcp add agent-bridge -- node <クローン先>/agent-bridge-mcp/dist/index.js
 codex mcp list
 ```
 
