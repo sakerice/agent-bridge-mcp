@@ -57,11 +57,12 @@ async function spawnClient(
 }
 
 describe("agent-bridge MCP server", () => {
-  it("5つのツールを公開する", async () => {
+  it("6つのツールを公開する", async () => {
     const tools = await client.listTools();
     const names = tools.tools.map((t) => t.name).sort();
     expect(names).toEqual([
       "delegate_task",
+      "get_artifact",
       "job_cancel",
       "job_result",
       "job_status",
@@ -197,6 +198,63 @@ describe("agent-bridge MCP server", () => {
     expect(delegate?.description).toContain("ユーザーに確認");
     expect(delegate?.description).toContain("gpt-5.6-terra");
     expect(delegate?.description).toContain("claude-sonnet-5");
+  });
+
+  it("メディアartifactsを検出し、get_artifactで画像をインライン取得できる", async () => {
+    const PNG_BASE64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "abm-media-"));
+    const delegated = await client.callTool({
+      name: "delegate_task",
+      arguments: { target: "claude", prompt: "generate image", cwd: workDir },
+    });
+    const { job_id } = JSON.parse(textOf(delegated));
+
+    let state = "running";
+    const start = Date.now();
+    while (state === "running") {
+      if (Date.now() - start > 10_000) throw new Error("timeout");
+      await new Promise((r) => setTimeout(r, 200));
+      const st = await client.callTool({
+        name: "job_status",
+        arguments: { job_id },
+      });
+      state = JSON.parse(textOf(st)).state;
+    }
+
+    // ジョブ開始後に生成されたメディアを模擬
+    fs.writeFileSync(
+      path.join(workDir, "preview.png"),
+      Buffer.from(PNG_BASE64, "base64"),
+    );
+
+    const result = await client.callTool({
+      name: "job_result",
+      arguments: { job_id },
+    });
+    const parsed = JSON.parse(textOf(result));
+    expect(
+      parsed.artifacts.some((a: { path: string }) =>
+        a.path.endsWith("preview.png"),
+      ),
+    ).toBe(true);
+
+    const art = await client.callTool({
+      name: "get_artifact",
+      arguments: { job_id, path: "preview.png" },
+    });
+    const content = (
+      art as { content: Array<{ type: string; data?: string; mimeType?: string }> }
+    ).content;
+    const img = content.find((c) => c.type === "image");
+    expect(img?.mimeType).toBe("image/png");
+    expect(img?.data).toBe(PNG_BASE64);
+
+    const bad = await client.callTool({
+      name: "get_artifact",
+      arguments: { job_id, path: "../../../etc/hosts" },
+    });
+    expect((bad as { isError?: boolean }).isError).toBe(true);
   });
 
   it("AGENT_BRIDGE_MODEL_GUIDE_FILEでガイドを差し替えられる", async () => {

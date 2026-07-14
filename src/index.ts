@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadModelGuide } from "./model-guide.js";
+import { scanArtifacts, readArtifact } from "./artifacts.js";
 import {
   JobManager,
   DepthLimitError,
@@ -67,7 +68,8 @@ function withJobErrors<A, R>(fn: (args: A) => R) {
 }
 
 const delegateDescription = [
-  "タスクをもう一方のAIエージェント(claude/codex)に非同期で委譲する。即座にjob_idを返す。進捗はjob_status、結果はjob_resultで回収する。",
+  "タスクをもう一方のAIエージェント(claude/codex)に非同期で委譲する。即座にjob_idを返す。進捗はjob_status、結果はjob_resultで回収する。" +
+    "委譲先が画像・動画などのメディアを生成した場合はjob_status/job_resultのartifacts欄に列挙されるので、get_artifactでプレビューし、中間/最終成果物としてユーザーに提示すること。",
   "",
   "## モデル運用ポリシー(委譲前に必ず読むこと)",
   "- model未指定の委譲は各CLIの既定=最高位モデルで実行され、トークンコストが高い。",
@@ -120,10 +122,19 @@ server.registerTool(
   },
 );
 
+// ジョブ開始以降にcwd配下で生成されたメディアの一覧。
+// FSのタイムスタンプ粒度による取りこぼしを避けるため2秒のマージンを取る。
+function artifactsOf(meta: { cwd: string; startedAt: string }) {
+  return scanArtifacts(meta.cwd, Date.parse(meta.startedAt) - 2_000);
+}
+
 server.registerTool(
   "job_status",
   {
-    description: "委譲ジョブの状態(running/succeeded/failed/cancelled/timed_out)と出力ログ末尾を返す。",
+    description:
+      "委譲ジョブの状態(running/succeeded/failed/cancelled/timed_out)と出力ログ末尾を返す。" +
+      "artifacts欄にはジョブ開始以降にcwd配下で生成されたメディアファイル(画像・動画・音声・PDF)が実行中でも列挙される。" +
+      "メディアを見つけたら get_artifact でプレビューし、中間成果物としてユーザーに提示すること。",
     inputSchema: { job_id: z.string() },
   },
   withJobErrors(({ job_id }: { job_id: string }) => {
@@ -136,6 +147,7 @@ server.registerTool(
       exit_code: s.exitCode,
       log_tail: s.logTail,
       stderr_tail: s.stderrTail,
+      artifacts: artifactsOf(s.meta),
     };
   }),
 );
@@ -143,13 +155,59 @@ server.registerTool(
 server.registerTool(
   "job_result",
   {
-    description: "完了した委譲ジョブの最終出力を返す。未完了ならstate: runningを返す。",
+    description:
+      "完了した委譲ジョブの最終出力を返す。未完了ならstate: runningを返す。" +
+      "artifacts欄にジョブが生成したメディアファイルが列挙される。画像は get_artifact でプレビューしてユーザーに提示すること。",
     inputSchema: { job_id: z.string() },
   },
   withJobErrors(({ job_id }: { job_id: string }) => {
+    const s = manager.status(job_id);
     const r = manager.result(job_id);
-    return { job_id, ...r };
+    return { job_id, ...r, artifacts: artifactsOf(s.meta) };
   }),
+);
+
+server.registerTool(
+  "get_artifact",
+  {
+    description:
+      "委譲ジョブが生成したメディアファイルを取得する。画像(png/jpg/gif/webp、3MB以下)は画像コンテンツとしてインライン返却されるので、内容を確認しユーザーに提示すること。" +
+      "動画・音声・PDF・大きい画像はパスとメタ情報が返るので、そのパスのファイルをユーザーに直接提示すること。" +
+      "pathはジョブのcwdからの相対パスまたはcwd配下の絶対パス。",
+    inputSchema: {
+      job_id: z.string(),
+      path: z.string().describe("取得するファイル(cwd相対またはcwd配下の絶対パス)"),
+    },
+  },
+  async ({ job_id, path: filePath }: { job_id: string; path: string }) => {
+    try {
+      const meta = manager.status(job_id).meta;
+      const art = readArtifact(meta.cwd, filePath);
+      if (art.kind === "image") {
+        return {
+          content: [
+            {
+              type: "image" as const,
+              data: art.base64,
+              mimeType: art.mimeType,
+            },
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                { path: art.path, bytes: art.bytes, mimeType: art.mimeType },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+      return ok(art);
+    } catch (e) {
+      if (e instanceof Error) return fail(e.message);
+      throw e;
+    }
+  },
 );
 
 server.registerTool(

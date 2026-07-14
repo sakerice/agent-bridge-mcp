@@ -60,15 +60,23 @@ Claude Code と Codex CLI が、互いに非同期でタスクを委譲し合う
 委譲できる(Claude→Codex, Codex→Claude)。委譲先の実行は `runner.js` が別プロセスとして
 detached 起動するため、委譲元のMCPサーバープロセスやセッションが終了してもジョブは動き続ける。
 
-## 5つのツール
+## 6つのツール
 
 | ツール | 説明 |
 |---|---|
 | `delegate_task` | タスクをもう一方のAIエージェント(`claude`/`codex`)に非同期で委譲する。引数: `target`(`claude`\|`codex`)、`prompt`(委譲する指示文)、`cwd`(作業ディレクトリ、絶対パス)、`model`(任意、モデル上書き)、`timeout_minutes`(任意、デフォルト30分)。即座に `job_id` を返す。 |
-| `job_status` | `job_id` を渡すと、状態(`running`/`succeeded`/`failed`/`cancelled`/`timed_out`)・`exit_code`・`log_tail`(stdout末尾)・`stderr_tail`(stderr末尾)を返す。 |
-| `job_result` | 完了したジョブの最終出力(`finalMessage`)と `stderrTail` を返す。未完了なら `state: "running"` のみ返す。 |
+| `job_status` | `job_id` を渡すと、状態(`running`/`succeeded`/`failed`/`cancelled`/`timed_out`)・`exit_code`・`log_tail`(stdout末尾)・`stderr_tail`(stderr末尾)・`artifacts`(後述)を返す。 |
+| `job_result` | 完了したジョブの最終出力(`finalMessage`)と `stderrTail`・`artifacts` を返す。未完了なら `state: "running"` のみ返す。 |
 | `job_cancel` | 実行中のジョブに `SIGTERM` を送ってキャンセルする。 |
 | `list_jobs` | 直近のジョブ一覧を新しい順で返す(`limit` 任意、デフォルト20件)。 |
+| `get_artifact` | ジョブが生成したメディアファイルを取得する。画像(png/jpg/gif/webp、3MB以下)はMCPの画像コンテンツとしてインライン返却され、オーケストレータがそのままユーザーに提示できる。動画・音声・PDF・大きい画像はパス+メタ情報を返す。パスはジョブcwd配下に制限。 |
+
+### メディアの途中プレビュー(artifacts)
+
+ジョブ開始以降に `cwd` 配下で生成・更新されたメディアファイル(png/jpg/gif/webp/svg/mp4/mov/webm/mp3/wav/m4a/pdf)は、
+`job_status` / `job_result` の `artifacts` 欄に `{path, bytes, modified_at}` として自動列挙される(最大20件、`node_modules`/隠しディレクトリ除外)。
+**実行中のジョブでも検出される**ため、オーケストレータはポーリング中に画像を `get_artifact` で取得し、中間成果物としてユーザーに提示できる。
+ツール説明にその旨の指示が埋め込まれているので、通常は依頼側が「画像ができたら見せて」と言わなくても提示される。
 
 内部的には、`target: "codex"` の場合は `codex exec --json -C <cwd> -s workspace-write --skip-git-repo-check -o <jobDir>/last-message.txt <prompt>` を、
 `target: "claude"` の場合は `claude -p <prompt> --output-format json --permission-mode acceptEdits` を、それぞれ子プロセスとして起動する
