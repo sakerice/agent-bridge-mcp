@@ -60,16 +60,33 @@ Claude Code と Codex CLI が、互いに非同期でタスクを委譲し合う
 委譲できる(Claude→Codex, Codex→Claude)。委譲先の実行は `runner.js` が別プロセスとして
 detached 起動するため、委譲元のMCPサーバープロセスやセッションが終了してもジョブは動き続ける。
 
-## 6つのツール
+## 7つのツール
 
 | ツール | 説明 |
 |---|---|
-| `delegate_task` | タスクをもう一方のAIエージェント(`claude`/`codex`)に非同期で委譲する。引数: `target`(`claude`\|`codex`)、`prompt`(委譲する指示文)、`cwd`(作業ディレクトリ、絶対パス)、`model`(任意、モデル上書き)、`timeout_minutes`(任意、デフォルト30分)。即座に `job_id` を返す。 |
-| `job_status` | `job_id` を渡すと、状態(`running`/`succeeded`/`failed`/`cancelled`/`timed_out`)・`exit_code`・`log_tail`(stdout末尾)・`stderr_tail`(stderr末尾)・`artifacts`(後述)を返す。 |
+| `delegate_task` | タスクをもう一方のAIエージェント(`claude`/`codex`)に非同期で委譲する。引数: `target`(`claude`\|`codex`)、`prompt`(委譲する指示文)、`cwd`(作業ディレクトリ、絶対パス)、`model`(任意)、`mode`(任意、`task`\|`review`)、`follow_up_of`(任意、継続委譲)、`timeout_minutes`(任意、デフォルト30分)。即座に `job_id` を返す。 |
+| `job_status` | `job_id` を渡すと、状態(`running`/`succeeded`/`failed`/`cancelled`/`timed_out`)・`exit_code`・`progress`(直近の活動要約、後述)・`log_tail`・`stderr_tail`・`artifacts`(後述)を返す。 |
 | `job_result` | 完了したジョブの最終出力(`finalMessage`)と `stderrTail`・`artifacts` を返す。未完了なら `state: "running"` のみ返す。 |
 | `job_cancel` | 実行中のジョブに `SIGTERM` を送ってキャンセルする。 |
 | `list_jobs` | 直近のジョブ一覧を新しい順で返す(`limit` 任意、デフォルト20件)。 |
 | `get_artifact` | ジョブが生成したメディアファイルを取得する。画像(png/jpg/gif/webp、3MB以下)はMCPの画像コンテンツとしてインライン返却され、オーケストレータがそのままユーザーに提示できる。動画・音声・PDF・大きい画像はパス+メタ情報を返す。パスはジョブcwd配下に制限。 |
+| `bridge_doctor` | セットアップ診断(CLIバイナリの存在・ジョブディレクトリの書き込み可否・委譲深さ)。委譲が失敗するときの切り分けに。 |
+
+### レビュー委譲(mode: review)
+
+`mode: "review"` で委譲すると読み取り専用でレビューさせられる(codex: `-s read-only` サンドボックス、claude: `--permission-mode plan`)。
+MCPプロンプト `codex-review` / `claude-review` も公開しており、Claude Codeでは `/mcp__agent-bridge__codex-review` のようなスラッシュコマンドとして呼び出せる。
+
+### セッション継続(follow_up_of)
+
+`follow_up_of: <前回のjob_id>` を指定すると、前回ジョブのセッションID(claudeは`session_id`、codexは`thread_id`をJSONL出力から自動取得)で
+`claude --resume` / `codex exec resume` を使い、**ワーカーが文脈を保持したまま追撃依頼**できる。同一targetのみ。レビュー指摘の修正依頼や深掘り質問に便利。
+
+### 進捗可視化(progress)
+
+claude側ジョブは `--output-format stream-json` で起動するため、実行中も `output.log` に活動がリアルタイムで流れる(codexの`--json`も同様)。
+`job_status` の `progress` 欄には直近の活動(発言スニペット・実行コマンド)の要約が入り、ツール説明で
+「ポーリングのたびに進捗をユーザーへ共有せよ」とオーケストレータに指示しているため、長時間ジョブがブラックボックス化しない。
 
 ### メディアの途中プレビュー(artifacts)
 
@@ -79,8 +96,8 @@ detached 起動するため、委譲元のMCPサーバープロセスやセッ�
 ツール説明にその旨の指示が埋め込まれているので、通常は依頼側が「画像ができたら見せて」と言わなくても提示される。
 
 内部的には、`target: "codex"` の場合は `codex exec --json -C <cwd> -s workspace-write --skip-git-repo-check -o <jobDir>/last-message.txt <prompt>` を、
-`target: "claude"` の場合は `claude -p <prompt> --output-format json --permission-mode acceptEdits` を、それぞれ子プロセスとして起動する
-(`src/commands.ts` の `buildCommand`)。
+`target: "claude"` の場合は `claude -p <prompt> --output-format stream-json --verbose --permission-mode acceptEdits` を、それぞれ子プロセスとして起動する
+(`src/commands.ts` の `buildCommand`。reviewモードではサンドボックス/パーミッションが読み取り専用に切り替わり、`follow_up_of` では `exec resume <id>` / `--resume <id>` が挿入される)。
 
 ## セットアップ手順
 

@@ -229,4 +229,71 @@ describe("JobManager", () => {
     expect(jobs[1].meta.id).toBe(a.id);
     expect(m.list(1)).toHaveLength(1);
   });
+
+  it("follow_up_ofで前ジョブのセッションを--resume継続する", async () => {
+    const m = makeManager();
+    const jobsDir = (m as unknown as { opts: { jobsDir: string } }).opts
+      .jobsDir;
+    const parent = m.delegate({
+      target: "claude",
+      prompt: "a",
+      cwd: os.tmpdir(),
+    });
+    await waitForState(m, parent.id);
+    const child = m.delegate({
+      target: "claude",
+      prompt: "続き",
+      cwd: os.tmpdir(),
+      followUpOf: parent.id,
+    });
+    await waitForState(m, child.id);
+    const jobSpec = JSON.parse(
+      fs.readFileSync(path.join(jobsDir, child.id, "job.json"), "utf8"),
+    );
+    expect(jobSpec.args).toContain("--resume");
+    expect(jobSpec.args[jobSpec.args.indexOf("--resume") + 1]).toBe(
+      "fake-sess-1",
+    );
+  });
+
+  it("follow_up_ofのターゲット不一致はエラー", async () => {
+    const m = makeManager();
+    const parent = m.delegate({
+      target: "claude",
+      prompt: "a",
+      cwd: os.tmpdir(),
+    });
+    await waitForState(m, parent.id);
+    expect(() =>
+      m.delegate({
+        target: "codex",
+        prompt: "x",
+        cwd: os.tmpdir(),
+        followUpOf: parent.id,
+      }),
+    ).toThrow(/target/);
+  });
+
+  it("follow_up_ofで前ジョブにセッションIDが無ければエラー", async () => {
+    const m = makeManager();
+    process.env.FAKE_MODE = "fail";
+    try {
+      const parent = m.delegate({
+        target: "claude",
+        prompt: "a",
+        cwd: os.tmpdir(),
+      });
+      await waitForState(m, parent.id);
+      expect(() =>
+        m.delegate({
+          target: "claude",
+          prompt: "x",
+          cwd: os.tmpdir(),
+          followUpOf: parent.id,
+        }),
+      ).toThrow(/セッション/);
+    } finally {
+      delete process.env.FAKE_MODE;
+    }
+  });
 });

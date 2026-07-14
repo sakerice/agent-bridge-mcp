@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadModelGuide } from "./model-guide.js";
 import { scanArtifacts, readArtifact } from "./artifacts.js";
+import { summarizeProgress } from "./progress.js";
 import {
   JobManager,
   DepthLimitError,
@@ -27,15 +28,19 @@ function resolveBin(envVar: string, name: string, fallback: string): string {
   return fallback;
 }
 
+const jobsDir =
+  process.env.AGENT_BRIDGE_JOBS_DIR ??
+  path.join(os.homedir(), ".agent-bridge", "jobs");
+const bins = {
+  claude: resolveBin("AGENT_BRIDGE_CLAUDE_BIN", "claude", CLAUDE_FALLBACK),
+  codex: resolveBin("AGENT_BRIDGE_CODEX_BIN", "codex", CODEX_FALLBACK),
+};
+const depth = Number.parseInt(process.env.AGENT_BRIDGE_DEPTH ?? "0", 10) || 0;
+
 const manager = new JobManager({
-  jobsDir:
-    process.env.AGENT_BRIDGE_JOBS_DIR ??
-    path.join(os.homedir(), ".agent-bridge", "jobs"),
-  bins: {
-    claude: resolveBin("AGENT_BRIDGE_CLAUDE_BIN", "claude", CLAUDE_FALLBACK),
-    codex: resolveBin("AGENT_BRIDGE_CODEX_BIN", "codex", CODEX_FALLBACK),
-  },
-  depth: Number.parseInt(process.env.AGENT_BRIDGE_DEPTH ?? "0", 10) || 0,
+  jobsDir,
+  bins,
+  depth,
   runnerPath: path.join(__dirname, "runner.js"),
 });
 
@@ -88,6 +93,18 @@ server.registerTool(
       prompt: z.string().min(1).describe("委譲するタスクの指示文"),
       cwd: z.string().describe("タスクの作業ディレクトリ(絶対パス)"),
       model: z.string().optional().describe("使用モデルの上書き(任意)"),
+      mode: z
+        .enum(["task", "review"])
+        .optional()
+        .describe(
+          "task(デフォルト)=通常の作業委譲。review=読み取り専用でのコードレビュー委譲(codex: read-onlyサンドボックス、claude: planモード)。レビュー依頼では必ずreviewを使うこと",
+        ),
+      follow_up_of: z
+        .string()
+        .optional()
+        .describe(
+          "前回の委譲ジョブのjob_idを指定すると、同じワーカーセッションを再開して文脈を保ったまま追撃依頼できる(同一targetのみ)",
+        ),
       timeout_minutes: z
         .number()
         .positive()
@@ -100,7 +117,7 @@ server.registerTool(
         ),
     },
   },
-  async ({ target, prompt, cwd, model, timeout_minutes }) => {
+  async ({ target, prompt, cwd, model, mode, follow_up_of, timeout_minutes }) => {
     if (!fs.existsSync(cwd)) return fail(`cwd が存在しません: ${cwd}`);
     try {
       const meta = manager.delegate({
@@ -108,6 +125,8 @@ server.registerTool(
         prompt,
         cwd,
         model,
+        mode,
+        followUpOf: follow_up_of,
         timeoutMinutes: timeout_minutes,
       });
       return ok({
@@ -117,6 +136,7 @@ server.registerTool(
       });
     } catch (e) {
       if (e instanceof DepthLimitError) return fail(e.message);
+      if (e instanceof Error && follow_up_of) return fail(e.message);
       throw e;
     }
   },
@@ -133,6 +153,7 @@ server.registerTool(
   {
     description:
       "委譲ジョブの状態(running/succeeded/failed/cancelled/timed_out)と出力ログ末尾を返す。" +
+      "progress欄にはワーカーの直近の活動(発言・実行コマンド)の要約が入るので、ポーリングのたびに新しい進捗をユーザーへ簡潔に共有し、ブラックボックス化を防ぐこと。" +
       "artifacts欄にはジョブ開始以降にcwd配下で生成されたメディアファイル(画像・動画・音声・PDF)が実行中でも列挙される。" +
       "メディアを見つけたら get_artifact でプレビューし、中間成果物としてユーザーに提示すること。",
     inputSchema: { job_id: z.string() },
@@ -145,6 +166,7 @@ server.registerTool(
       target: s.meta.target,
       started_at: s.meta.startedAt,
       exit_code: s.exitCode,
+      progress: summarizeProgress(s.logTail),
       log_tail: s.logTail,
       stderr_tail: s.stderrTail,
       artifacts: artifactsOf(s.meta),
@@ -240,5 +262,69 @@ server.registerTool(
     }));
   }),
 );
+
+server.registerTool(
+  "bridge_doctor",
+  {
+    description:
+      "agent-bridgeのセットアップを診断する(CLIバイナリの存在、ジョブディレクトリの書き込み可否、委譲深さ)。委譲が失敗するときの切り分けに使う。",
+    inputSchema: {},
+  },
+  async () => {
+    const binInfo = (bin: string) => ({ path: bin, exists: fs.existsSync(bin) });
+    let writable = true;
+    try {
+      fs.mkdirSync(jobsDir, { recursive: true });
+      fs.accessSync(jobsDir, fs.constants.W_OK);
+    } catch {
+      writable = false;
+    }
+    return ok({
+      claude_bin: binInfo(bins.claude),
+      codex_bin: binInfo(bins.codex),
+      jobs_dir: { path: jobsDir, writable },
+      depth,
+      model_guide: loadModelGuide().slice(0, 80),
+      hint: "バイナリ不在ならsymlink/パス設定を、認証切れはジョブのstderr_tailを確認",
+    });
+  },
+);
+
+// レビュー委譲のプロンプト(Claude Codeでは /mcp__agent-bridge__codex-review
+// のようなスラッシュコマンドとして表示される)
+function reviewPromptText(target: "claude" | "codex", focus?: string): string {
+  return [
+    `現在のリポジトリの未コミット変更(なければ直近コミット)を ${target} にレビューさせてください。`,
+    `1. delegate_task を target: "${target}", mode: "review", cwd: このリポジトリのルート で呼ぶ。`,
+    "2. promptにはレビュー観点(正確性・セキュリティ・保守性)と、対象diffの取得方法(git diff / git show)を明記する。",
+    focus ? `3. 特に注目する観点: ${focus}` : "",
+    "job_statusをポーリングして進捗をユーザーに共有し、完了したらjob_resultの指摘を重要度順に整理して報告すること。",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+for (const target of ["codex", "claude"] as const) {
+  server.registerPrompt(
+    `${target}-review`,
+    {
+      description: `${target}に現在の変更のコードレビューを委譲する`,
+      argsSchema: {
+        focus: z.string().optional().describe("特に見てほしい観点(任意)"),
+      },
+    },
+    ({ focus }) => ({
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text: reviewPromptText(target, focus),
+          },
+        },
+      ],
+    }),
+  );
+}
 
 await server.connect(new StdioServerTransport());

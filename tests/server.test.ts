@@ -57,10 +57,11 @@ async function spawnClient(
 }
 
 describe("agent-bridge MCP server", () => {
-  it("6つのツールを公開する", async () => {
+  it("7つのツールを公開する", async () => {
     const tools = await client.listTools();
     const names = tools.tools.map((t) => t.name).sort();
     expect(names).toEqual([
+      "bridge_doctor",
       "delegate_task",
       "get_artifact",
       "job_cancel",
@@ -68,6 +69,79 @@ describe("agent-bridge MCP server", () => {
       "job_status",
       "list_jobs",
     ]);
+  });
+
+  it("レビュー用プロンプトを公開する", async () => {
+    const prompts = await client.listPrompts();
+    const names = prompts.prompts.map((p) => p.name).sort();
+    expect(names).toContain("codex-review");
+    expect(names).toContain("claude-review");
+    const got = await client.getPrompt({
+      name: "codex-review",
+      arguments: {},
+    });
+    const text = (got.messages[0].content as { text: string }).text;
+    expect(text).toContain("delegate_task");
+    expect(text).toContain("review");
+  });
+
+  it("bridge_doctorが診断結果を返す", async () => {
+    const res = await client.callTool({ name: "bridge_doctor", arguments: {} });
+    const parsed = JSON.parse(textOf(res));
+    expect(parsed.claude_bin.exists).toBe(true);
+    expect(parsed.codex_bin.exists).toBe(true);
+    expect(parsed.jobs_dir.writable).toBe(true);
+    expect(parsed.depth).toBe(0);
+  });
+
+  it("job_statusが進捗要約(progress)を返し、follow_up_ofで継続委譲できる", async () => {
+    const delegated = await client.callTool({
+      name: "delegate_task",
+      arguments: { target: "claude", prompt: "hi", cwd: os.tmpdir() },
+    });
+    const { job_id } = JSON.parse(textOf(delegated));
+
+    let state = "running";
+    let progress: string[] = [];
+    const start = Date.now();
+    while (state === "running") {
+      if (Date.now() - start > 10_000) throw new Error("timeout");
+      await new Promise((r) => setTimeout(r, 200));
+      const st = await client.callTool({
+        name: "job_status",
+        arguments: { job_id },
+      });
+      const parsed = JSON.parse(textOf(st));
+      state = parsed.state;
+      progress = parsed.progress;
+    }
+    expect(progress.some((l) => l.includes("working on it"))).toBe(true);
+
+    const followUp = await client.callTool({
+      name: "delegate_task",
+      arguments: {
+        target: "claude",
+        prompt: "続き",
+        cwd: os.tmpdir(),
+        follow_up_of: job_id,
+      },
+    });
+    const followParsed = JSON.parse(textOf(followUp));
+    expect(followParsed.job_id).toBeTruthy();
+  });
+
+  it("mode: reviewの委譲を受け付ける", async () => {
+    const res = await client.callTool({
+      name: "delegate_task",
+      arguments: {
+        target: "codex",
+        prompt: "review the repo",
+        cwd: os.tmpdir(),
+        mode: "review",
+      },
+    });
+    const { job_id } = JSON.parse(textOf(res));
+    expect(job_id).toBeTruthy();
   });
 
   it("delegate→status→resultの一連が動く", async () => {

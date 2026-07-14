@@ -5,6 +5,7 @@ import * as path from "node:path";
 import {
   buildCommand,
   extractFinalMessage,
+  extractSessionId,
   LAST_MESSAGE_FILE,
 } from "../src/commands.js";
 
@@ -56,7 +57,34 @@ describe("buildCommand", () => {
     expect(cmd.args[cmd.args.length - 1]).toBe("p");
   });
 
-  it("claude向けコマンドを構築する", () => {
+  it("codexのreviewモードはread-onlyサンドボックスで起動する", () => {
+    const cmd = buildCommand(
+      { target: "codex", prompt: "review this", cwd: "/tmp", mode: "review" },
+      "/tmp/job1",
+      bins,
+      1,
+    );
+    expect(cmd.args).toContain("read-only");
+    expect(cmd.args).not.toContain("workspace-write");
+  });
+
+  it("codexのresumeは exec resume <sid> で継続する", () => {
+    const cmd = buildCommand(
+      {
+        target: "codex",
+        prompt: "続きをやって",
+        cwd: "/tmp",
+        resumeSessionId: "sess-abc",
+      },
+      "/tmp/job1",
+      bins,
+      1,
+    );
+    expect(cmd.args.slice(0, 3)).toEqual(["exec", "resume", "sess-abc"]);
+    expect(cmd.args[cmd.args.length - 1]).toBe("続きをやって");
+  });
+
+  it("claude向けコマンドはstream-jsonで進捗を出力する", () => {
     const cmd = buildCommand(
       { target: "claude", prompt: "review this", cwd: "/tmp/proj" },
       "/tmp/job1",
@@ -66,7 +94,8 @@ describe("buildCommand", () => {
     expect(cmd.bin).toBe("/bin/claude");
     expect(cmd.args).toEqual([
       "-p", "review this",
-      "--output-format", "json",
+      "--output-format", "stream-json",
+      "--verbose",
       "--permission-mode", "acceptEdits",
     ]);
   });
@@ -80,6 +109,32 @@ describe("buildCommand", () => {
     );
     expect(cmd.args).toContain("--model");
     expect(cmd.args[cmd.args.indexOf("--model") + 1]).toBe("claude-sonnet-5");
+  });
+
+  it("claudeのreviewモードはplanパーミッションで起動する", () => {
+    const cmd = buildCommand(
+      { target: "claude", prompt: "review", cwd: "/tmp", mode: "review" },
+      "/tmp/job1",
+      bins,
+      1,
+    );
+    expect(cmd.args[cmd.args.indexOf("--permission-mode") + 1]).toBe("plan");
+  });
+
+  it("claudeのresumeは --resume <sid> で継続する", () => {
+    const cmd = buildCommand(
+      {
+        target: "claude",
+        prompt: "続き",
+        cwd: "/tmp",
+        resumeSessionId: "sess-xyz",
+      },
+      "/tmp/job1",
+      bins,
+      1,
+    );
+    expect(cmd.args).toContain("--resume");
+    expect(cmd.args[cmd.args.indexOf("--resume") + 1]).toBe("sess-xyz");
   });
 });
 
@@ -99,7 +154,7 @@ describe("extractFinalMessage", () => {
     const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), "abm-"));
     fs.writeFileSync(
       path.join(jobDir, "output.log"),
-      'noise\n{"type":"other"}\n{"result":"claude answer","cost":1}\n',
+      'noise\n{"type":"other"}\n{"type":"result","result":"claude answer","session_id":"s1"}\n',
     );
     expect(extractFinalMessage("claude", jobDir)).toBe("claude answer");
   });
@@ -108,5 +163,31 @@ describe("extractFinalMessage", () => {
     const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), "abm-"));
     fs.writeFileSync(path.join(jobDir, "output.log"), "no json here\n");
     expect(extractFinalMessage("claude", jobDir)).toBeUndefined();
+  });
+});
+
+describe("extractSessionId", () => {
+  it("claudeのstream-json出力からsession_idを取る", () => {
+    const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), "abm-"));
+    fs.writeFileSync(
+      path.join(jobDir, "output.log"),
+      '{"type":"system","session_id":"sess-1"}\n{"type":"result","result":"ok","session_id":"sess-1"}\n',
+    );
+    expect(extractSessionId("claude", jobDir)).toBe("sess-1");
+  });
+
+  it("codexのJSONL出力からthread_idを取る", () => {
+    const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), "abm-"));
+    fs.writeFileSync(
+      path.join(jobDir, "output.log"),
+      '{"type":"thread.started","thread_id":"th-9"}\n{"type":"turn.completed"}\n',
+    );
+    expect(extractSessionId("codex", jobDir)).toBe("th-9");
+  });
+
+  it("見つからなければundefined", () => {
+    const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), "abm-"));
+    fs.writeFileSync(path.join(jobDir, "output.log"), "plain text\n");
+    expect(extractSessionId("claude", jobDir)).toBeUndefined();
   });
 });

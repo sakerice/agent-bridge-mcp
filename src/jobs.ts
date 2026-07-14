@@ -5,6 +5,7 @@ import * as path from "node:path";
 import {
   buildCommand,
   extractFinalMessage,
+  extractSessionId,
   type Bins,
   type DelegateSpec,
 } from "./commands.js";
@@ -68,17 +69,45 @@ const STALE_GRACE_MS = 5 * 60_000;
 export class JobManager {
   constructor(private opts: JobManagerOptions) {}
 
-  delegate(spec: DelegateSpec & { timeoutMinutes?: number }): JobMeta {
+  delegate(
+    spec: DelegateSpec & { timeoutMinutes?: number; followUpOf?: string },
+  ): JobMeta {
     if (this.opts.depth >= 2) {
       throw new DepthLimitError(
         `再委譲の深さ制限(AGENT_BRIDGE_DEPTH=${this.opts.depth})に達しました。これ以上の連鎖委譲は禁止されています。`,
       );
     }
+
+    // 継続委譲: 前ジョブのセッションIDを取り出し、同じワーカーセッションを再開する
+    let resumeSessionId = spec.resumeSessionId;
+    if (spec.followUpOf) {
+      const parent = this.readMeta(spec.followUpOf);
+      if (parent.target !== spec.target) {
+        throw new Error(
+          `follow_up_of のジョブは target が異なります(前: ${parent.target}, 今回: ${spec.target})`,
+        );
+      }
+      resumeSessionId = extractSessionId(
+        parent.target,
+        this.jobDir(spec.followUpOf),
+      );
+      if (!resumeSessionId) {
+        throw new Error(
+          `前ジョブ(${spec.followUpOf})からセッションIDを取得できませんでした。新規委譲(follow_up_ofなし)で依頼してください。`,
+        );
+      }
+    }
+
     const id = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const jobDir = path.join(this.opts.jobsDir, id);
     fs.mkdirSync(jobDir, { recursive: true });
 
-    const cmd = buildCommand(spec, jobDir, this.opts.bins, this.opts.depth + 1);
+    const cmd = buildCommand(
+      { ...spec, resumeSessionId },
+      jobDir,
+      this.opts.bins,
+      this.opts.depth + 1,
+    );
     const timeoutMinutes = spec.timeoutMinutes ?? 30;
     fs.writeFileSync(
       path.join(jobDir, "job.json"),

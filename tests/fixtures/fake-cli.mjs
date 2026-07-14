@@ -18,6 +18,19 @@ if (mode === "sleep") {
   console.error("fake failure: auth expired");
   process.exit(1);
 } else {
-  console.log(JSON.stringify({ result: "fake done" }));
+  // claudeのstream-json風: 進捗イベント + session_id付きの最終result行
+  console.log(
+    JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "working on it" }] },
+    }),
+  );
+  console.log(
+    JSON.stringify({
+      type: "result",
+      result: "fake done",
+      session_id: "fake-sess-1",
+    }),
+  );
   process.exit(0);
 }
