@@ -80,6 +80,24 @@ describe("JobManager", () => {
     }
   });
 
+  it("巨大なログでもstatusは末尾だけを有界に返す", async () => {
+    const m = makeManager();
+    const meta = m.delegate({
+      target: "claude",
+      prompt: "x",
+      cwd: os.tmpdir(),
+    });
+    await waitForState(m, meta.id);
+    const jobsDir = (m as unknown as { opts: { jobsDir: string } }).opts.jobsDir;
+    fs.writeFileSync(
+      path.join(jobsDir, meta.id, "output.log"),
+      `${"古".repeat(100_000)}LATEST`,
+    );
+    const logTail = m.status(meta.id).logTail;
+    expect(logTail.length).toBeLessThanOrEqual(2000);
+    expect(logTail.endsWith("LATEST")).toBe(true);
+  });
+
   it("cancelで実行中ジョブがcancelledになる", async () => {
     const m = makeManager();
     process.env.FAKE_MODE = "sleep";
@@ -272,6 +290,59 @@ describe("JobManager", () => {
         followUpOf: parent.id,
       }),
     ).toThrow(/target/);
+  });
+
+  it("実行中ジョブへのfollow_up_ofは競合防止のため拒否する", async () => {
+    const m = makeManager();
+    process.env.FAKE_MODE = "sleep";
+    try {
+      const parent = m.delegate({
+        target: "claude",
+        prompt: "a",
+        cwd: os.tmpdir(),
+      });
+      expect(() =>
+        m.delegate({
+          target: "claude",
+          prompt: "続き",
+          cwd: os.tmpdir(),
+          followUpOf: parent.id,
+        }),
+      ).toThrow(/実行中/);
+      m.cancel(parent.id);
+      await waitForState(m, parent.id);
+    } finally {
+      delete process.env.FAKE_MODE;
+    }
+  });
+
+  it("cwdは絶対パスのディレクトリだけを受け付ける", () => {
+    const m = makeManager();
+    const file = path.join(os.tmpdir(), `abm-file-${Date.now()}`);
+    fs.writeFileSync(file, "x");
+    expect(() =>
+      m.delegate({ target: "claude", prompt: "x", cwd: "relative" }),
+    ).toThrow(/絶対パス/);
+    expect(() =>
+      m.delegate({ target: "claude", prompt: "x", cwd: file }),
+    ).toThrow(/ディレクトリ/);
+  });
+
+  it("ジョブディレクトリとJSONファイルを非公開権限で作る", async () => {
+    if (process.platform === "win32") return;
+    const m = makeManager();
+    const meta = m.delegate({
+      target: "claude",
+      prompt: "secret",
+      cwd: os.tmpdir(),
+    });
+    await waitForState(m, meta.id);
+    const jobsDir = (m as unknown as { opts: { jobsDir: string } }).opts.jobsDir;
+    const dir = path.join(jobsDir, meta.id);
+    expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(dir, "meta.json")).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.join(dir, "job.json")).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.join(dir, "result.json")).mode & 0o777).toBe(0o600);
   });
 
   it("follow_up_ofで前ジョブにセッションIDが無ければエラー", async () => {

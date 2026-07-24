@@ -92,6 +92,10 @@ describe("agent-bridge MCP server", () => {
     expect(parsed.codex_bin.exists).toBe(true);
     expect(parsed.jobs_dir.writable).toBe(true);
     expect(parsed.depth).toBe(0);
+    expect(parsed.transport).toEqual({
+      active: "stdio",
+      http_sse_allowed: false,
+    });
   });
 
   it("job_statusが進捗要約(progress)を返し、follow_up_ofで継続委譲できる", async () => {

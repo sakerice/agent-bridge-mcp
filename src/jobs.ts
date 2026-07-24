@@ -10,6 +10,7 @@ import {
   type DelegateSpec,
 } from "./commands.js";
 import type { Target } from "./commands.js";
+import { writeJsonAtomic } from "./storage.js";
 
 export type JobState =
   | "running"
@@ -27,6 +28,8 @@ export interface JobMeta {
   runnerPid: number;
   startedAt: string;
   timeoutMinutes: number;
+  mode?: "task" | "review";
+  followUpOf?: string;
 }
 
 interface JobResultFile {
@@ -47,11 +50,23 @@ export interface JobManagerOptions {
 }
 
 const TAIL_CHARS = 2000;
+const TAIL_BYTES = 16 * 1024;
 
 function tail(file: string): string {
   if (!fs.existsSync(file)) return "";
-  const text = fs.readFileSync(file, "utf8");
-  return text.slice(-TAIL_CHARS);
+  const fd = fs.openSync(file, "r");
+  try {
+    const size = fs.fstatSync(fd).size;
+    const bytes = Math.min(size, TAIL_BYTES);
+    const buffer = Buffer.allocUnsafe(bytes);
+    fs.readSync(fd, buffer, 0, bytes, size - bytes);
+    // Starting in the middle of a UTF-8 sequence can produce one replacement
+    // character, but reading from the end and slicing by characters remains
+    // bounded and preserves the newest log content.
+    return buffer.toString("utf8").slice(-TAIL_CHARS);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function pidAlive(pid: number): boolean {
@@ -77,6 +92,18 @@ export class JobManager {
         `再委譲の深さ制限(AGENT_BRIDGE_DEPTH=${this.opts.depth})に達しました。これ以上の連鎖委譲は禁止されています。`,
       );
     }
+    if (!path.isAbsolute(spec.cwd)) {
+      throw new Error(`cwd は絶対パスで指定してください: ${spec.cwd}`);
+    }
+    let cwdStat: fs.Stats;
+    try {
+      cwdStat = fs.statSync(spec.cwd);
+    } catch {
+      throw new Error(`cwd が存在しません: ${spec.cwd}`);
+    }
+    if (!cwdStat.isDirectory()) {
+      throw new Error(`cwd はディレクトリではありません: ${spec.cwd}`);
+    }
 
     // 継続委譲: 前ジョブのセッションIDを取り出し、同じワーカーセッションを再開する
     let resumeSessionId = spec.resumeSessionId;
@@ -85,6 +112,12 @@ export class JobManager {
       if (parent.target !== spec.target) {
         throw new Error(
           `follow_up_of のジョブは target が異なります(前: ${parent.target}, 今回: ${spec.target})`,
+        );
+      }
+      const parentState = this.stateOf(spec.followUpOf).state;
+      if (parentState === "running") {
+        throw new Error(
+          `前ジョブ(${spec.followUpOf})はまだ実行中です。完了後に follow_up_of を指定してください。`,
         );
       }
       resumeSessionId = extractSessionId(
@@ -100,7 +133,7 @@ export class JobManager {
 
     const id = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const jobDir = path.join(this.opts.jobsDir, id);
-    fs.mkdirSync(jobDir, { recursive: true });
+    fs.mkdirSync(jobDir, { recursive: true, mode: 0o700 });
 
     const cmd = buildCommand(
       { ...spec, resumeSessionId },
@@ -109,20 +142,13 @@ export class JobManager {
       this.opts.depth + 1,
     );
     const timeoutMinutes = spec.timeoutMinutes ?? 30;
-    fs.writeFileSync(
-      path.join(jobDir, "job.json"),
-      JSON.stringify(
-        {
-          bin: cmd.bin,
-          args: cmd.args,
-          cwd: spec.cwd,
-          env: { AGENT_BRIDGE_DEPTH: String(this.opts.depth + 1) },
-          timeoutMs: timeoutMinutes * 60_000,
-        },
-        null,
-        2,
-      ),
-    );
+    writeJsonAtomic(path.join(jobDir, "job.json"), {
+      bin: cmd.bin,
+      args: cmd.args,
+      cwd: spec.cwd,
+      env: { AGENT_BRIDGE_DEPTH: String(this.opts.depth + 1) },
+      timeoutMs: timeoutMinutes * 60_000,
+    });
 
     const runner = spawn(process.execPath, [this.opts.runnerPath, jobDir], {
       detached: true,
@@ -136,19 +162,12 @@ export class JobManager {
       // process.kill(-1, ...)がプロセスグループ全体を対象にしてしまう危険な
       // センチネルなので、result.jsonを先に書いてstateOf()がresult.json優先で
       // failedを返すようにし、"running"のまま取り残されないようにする。
-      fs.writeFileSync(
-        path.join(jobDir, "result.json"),
-        JSON.stringify(
-          {
-            state: "failed",
-            exitCode: null,
-            signal: null,
-            endedAt: new Date().toISOString(),
-          },
-          null,
-          2,
-        ),
-      );
+      writeJsonAtomic(path.join(jobDir, "result.json"), {
+        state: "failed",
+        exitCode: null,
+        signal: null,
+        endedAt: new Date().toISOString(),
+      });
     }
 
     const meta: JobMeta = {
@@ -160,11 +179,10 @@ export class JobManager {
       runnerPid,
       startedAt: new Date().toISOString(),
       timeoutMinutes,
+      mode: spec.mode,
+      followUpOf: spec.followUpOf,
     };
-    fs.writeFileSync(
-      path.join(jobDir, "meta.json"),
-      JSON.stringify(meta, null, 2),
-    );
+    writeJsonAtomic(path.join(jobDir, "meta.json"), meta);
     return meta;
   }
 

@@ -87,4 +87,18 @@ describe("runner", () => {
     expect(result.state).toBe("failed");
     expect(result.exitCode).toBeNull();
   });
+
+  it("job.json が正しいJSONでも不正な形式なら安全にfailedにする", async () => {
+    const jobDir = fs.mkdtempSync(path.join(os.tmpdir(), "abm-run-"));
+    fs.writeFileSync(
+      path.join(jobDir, "job.json"),
+      JSON.stringify({ bin: "x", args: "not-array", timeoutMs: -1 }),
+    );
+    runRunner(jobDir);
+    const result = await waitForResult(jobDir);
+    expect(result.state).toBe("failed");
+    expect(fs.readFileSync(path.join(jobDir, "stderr.log"), "utf8")).toContain(
+      "形式が不正",
+    );
+  });
 });

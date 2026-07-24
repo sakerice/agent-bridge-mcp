@@ -12,6 +12,10 @@ Claude Code と Codex CLI が、互いに非同期でタスクを委譲し合う
 - ジョブは即座に `job_id` を返して制御を戻す(同期待ちしない)。進捗確認・結果回収は別ツール呼び出しで行う。
 - ジョブの状態は `~/.agent-bridge/jobs/<job_id>/` 以下にファイルとして永続化されるため、
   委譲元セッションが終了・再起動してもジョブ結果を後から回収できる。
+- プロンプトや出力を含むジョブディレクトリは `0700`、管理JSONとログは `0600` で作成し、
+  結果JSONは一時ファイルからのrenameで原子的に確定する。
+- 通信方式はセキュリティ境界として `stdio` のみに固定する。HTTP/SSEはサポートせず、
+  `AGENT_BRIDGE_TRANSPORT` に `stdio` 以外が指定された場合は起動を拒否する。
 - 無限に委譲し合う("Claude→Codex→Claude→Codex→…")事故を防ぐため、再委譲の深さ制限(`AGENT_BRIDGE_DEPTH`)を持つ。
 
 ## アーキテクチャ
@@ -79,8 +83,9 @@ MCPプロンプト `codex-review` / `claude-review` も公開しており、Clau
 
 ### セッション継続(follow_up_of)
 
-`follow_up_of: <前回のjob_id>` を指定すると、前回ジョブのセッションID(claudeは`session_id`、codexは`thread_id`をJSONL出力から自動取得)で
+`follow_up_of: <前回のjob_id>` を指定すると、完了した前回ジョブのセッションID(claudeは`session_id`、codexは`thread_id`をJSONL出力から自動取得)で
 `claude --resume` / `codex exec resume` を使い、**ワーカーが文脈を保持したまま追撃依頼**できる。同一targetのみ。レビュー指摘の修正依頼や深掘り質問に便利。
+同じセッションを並行実行して壊さないよう、前回ジョブがまだ実行中の場合は拒否される。
 
 ### 進捗可視化(progress)
 
@@ -165,6 +170,7 @@ codex mcp list
 | `AGENT_BRIDGE_CLAUDE_BIN` | `claude` バイナリのパス | 環境変数が未設定なら `/opt/homebrew/bin/claude` の存在を確認して使用し、それも無ければ同じ `/opt/homebrew/bin/claude` をハードコードされた最終フォールバックとして使う(結果的に常にこのパスになる) |
 | `AGENT_BRIDGE_CODEX_BIN` | `codex` バイナリのパス | `/opt/homebrew/bin/codex` があればそれ、なければ `/Applications/ChatGPT.app/Contents/Resources/codex`(フォールバック) |
 | `AGENT_BRIDGE_DEPTH` | 現在の委譲の深さ(通常は自分で設定しない。委譲時にサーバーが `+1` して子プロセスに渡す) | `0` |
+| `AGENT_BRIDGE_TRANSPORT` | 通信方式。セキュリティ上 `stdio` のみ許可。HTTP/SSE等を指定すると起動時にエラー | `stdio` |
 | `AGENT_BRIDGE_MODEL_GUIDE_FILE` | モデル選定ガイドのファイルパス | `~/.agent-bridge/model-guide.md`(無ければ内蔵デフォルト) |
 
 ## モデル運用
@@ -242,4 +248,4 @@ npm test
 ```
 
 fakeバイナリ(テスト用のダミー `claude`/`codex` スクリプト)を使ったユニットテストで、
-ジョブのライフサイクル・深さ制限・タイムアウト・エラー処理などを検証している(35/35 pass)。
+ジョブのライフサイクル・深さ制限・タイムアウト・エラー処理などを検証している(78 tests)。

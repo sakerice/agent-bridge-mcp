@@ -10,12 +10,23 @@ import { loadModelGuide } from "./model-guide.js";
 import { scanArtifacts, readArtifact } from "./artifacts.js";
 import { summarizeProgress } from "./progress.js";
 import {
+  assertStdioTransport,
+  SUPPORTED_TRANSPORT,
+} from "./transport-policy.js";
+import {
   JobManager,
   DepthLimitError,
   JobNotFoundError,
 } from "./jobs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+try {
+  assertStdioTransport();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(2);
+}
 
 const CLAUDE_FALLBACK = "/opt/homebrew/bin/claude";
 const CODEX_FALLBACK = "/Applications/ChatGPT.app/Contents/Resources/codex";
@@ -118,7 +129,6 @@ server.registerTool(
     },
   },
   async ({ target, prompt, cwd, model, mode, follow_up_of, timeout_minutes }) => {
-    if (!fs.existsSync(cwd)) return fail(`cwd が存在しません: ${cwd}`);
     try {
       const meta = manager.delegate({
         target,
@@ -135,8 +145,9 @@ server.registerTool(
         hint: "job_status で進捗、完了後に job_result で結果を取得",
       });
     } catch (e) {
-      if (e instanceof DepthLimitError) return fail(e.message);
-      if (e instanceof Error && follow_up_of) return fail(e.message);
+      if (e instanceof DepthLimitError || e instanceof Error) {
+        return fail(e.message);
+      }
       throw e;
     }
   },
@@ -284,6 +295,10 @@ server.registerTool(
       codex_bin: binInfo(bins.codex),
       jobs_dir: { path: jobsDir, writable },
       depth,
+      transport: {
+        active: SUPPORTED_TRANSPORT,
+        http_sse_allowed: false,
+      },
       model_guide: loadModelGuide().slice(0, 80),
       hint: "バイナリ不在ならsymlink/パス設定を、認証切れはジョブのstderr_tailを確認",
     });
