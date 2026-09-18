@@ -20,11 +20,30 @@ describe("loadModelGuide", () => {
     expect(loadModelGuide(p)).toContain("test-model-x");
   });
 
-  it("内蔵デフォルトは両陣営の高位/ワーカー/画像モデルを含む", () => {
-    expect(DEFAULT_MODEL_GUIDE).toContain("claude-fable-5");
-    expect(DEFAULT_MODEL_GUIDE).toContain("claude-sonnet-5");
-    expect(DEFAULT_MODEL_GUIDE).toContain("gpt-5.6-sol");
-    expect(DEFAULT_MODEL_GUIDE).toContain("gpt-5.6-terra");
-    expect(DEFAULT_MODEL_GUIDE).toContain("gpt-image-2");
+  // ここでモデル名を固定しないこと。
+  //
+  // 以前このテストは claude-fable-5 / gpt-5.6-sol / gpt-5.6-terra / gpt-image-2 が
+  // 「含まれていること」を要求していた。モデルは入れ替わるので、この形は
+  // **ガイドを古いまま固定する**。しかも gpt-image-2 は「画像生成はこれを指定」という
+  // 誤った助言とセットで載っていて、そのとおりに指定すると
+  // 「not supported when using Codex with a ChatGPT account」で必ず失敗する。
+  // 固定すべきなのは名前ではなく、**古くなっても変わらない決まり**のほう。
+  it("内蔵デフォルトは日付を明示している(古さを読み手に伝えるため)", () => {
+    expect(DEFAULT_MODEL_GUIDE).toMatch(/20\d\d-\d\d-\d\d/);
+  });
+
+  it("内蔵デフォルトは画像モデルを model に指定しないよう警告する", () => {
+    expect(DEFAULT_MODEL_GUIDE).toContain("model を指定しない");
+    // 失敗の実文言を残す。次に踏んだ人が検索で辿り着けるようにするため
+    expect(DEFAULT_MODEL_GUIDE).toContain("ChatGPT account");
+  });
+
+  it("内蔵デフォルトは高位/ワーカーの割り当ての原則を述べている", () => {
+    expect(DEFAULT_MODEL_GUIDE).toContain("高位モデルには高位の仕事");
+    expect(DEFAULT_MODEL_GUIDE).toContain("ワーカー仕事");
+  });
+
+  it("内蔵デフォルトは model 未指定時の既定の挙動を述べている", () => {
+    expect(DEFAULT_MODEL_GUIDE).toContain("model未指定");
   });
 });
