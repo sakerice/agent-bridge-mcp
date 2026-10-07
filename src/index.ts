@@ -28,23 +28,31 @@ try {
   process.exit(2);
 }
 
-const CLAUDE_FALLBACK = "/opt/homebrew/bin/claude";
-const CODEX_FALLBACK = "/Applications/ChatGPT.app/Contents/Resources/codex";
+// 実行ファイルの候補。先に見つかったものを使う（環境変数で明示すればそれが最優先）。
+// 置き場所は配布元の更新で変わる。2026-10 に ChatGPT アプリの codex が
+// Resources/codex から Resources/codex-cli/bin/codex に移り、両方とも見つからなくなっていた。
+const CLAUDE_CANDIDATES = [
+  "/opt/homebrew/bin/claude",
+  path.join(os.homedir(), ".local", "bin", "claude"),
+];
+const CODEX_CANDIDATES = [
+  "/opt/homebrew/bin/codex",
+  "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+  "/Applications/ChatGPT.app/Contents/Resources/codex",
+];
 
-function resolveBin(envVar: string, name: string, fallback: string): string {
+function resolveBin(envVar: string, candidates: string[]): string {
   const fromEnv = process.env[envVar];
   if (fromEnv) return fromEnv;
-  const brewPath = `/opt/homebrew/bin/${name}`;
-  if (fs.existsSync(brewPath)) return brewPath;
-  return fallback;
+  return candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
 }
 
 const jobsDir =
   process.env.AGENT_BRIDGE_JOBS_DIR ??
   path.join(os.homedir(), ".agent-bridge", "jobs");
 const bins = {
-  claude: resolveBin("AGENT_BRIDGE_CLAUDE_BIN", "claude", CLAUDE_FALLBACK),
-  codex: resolveBin("AGENT_BRIDGE_CODEX_BIN", "codex", CODEX_FALLBACK),
+  claude: resolveBin("AGENT_BRIDGE_CLAUDE_BIN", CLAUDE_CANDIDATES),
+  codex: resolveBin("AGENT_BRIDGE_CODEX_BIN", CODEX_CANDIDATES),
 };
 const depth = Number.parseInt(process.env.AGENT_BRIDGE_DEPTH ?? "0", 10) || 0;
 
