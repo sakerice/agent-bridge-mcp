@@ -108,23 +108,31 @@ claude側ジョブは `--output-format stream-json` で起動するため、実�
 
 以下は実際にセットアップ時に実行したコマンド(このリポジトリの環境: macOS, Homebrew, `/opt/homebrew/bin`)。
 
-### Step 1: codex CLI を PATH に通す
+### Step 1: codex と claude を使える状態にする
 
-ChatGPT.app にバンドルされた codex バイナリを Homebrew の bin にシンボリックリンクする。
+agent-bridge は実行ファイルを次の順に探す(先に見つかったものを使う。環境変数で明示すればそれが最優先)。
+
+- codex: `/opt/homebrew/bin/codex` → `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` → `/Applications/ChatGPT.app/Contents/Resources/codex`(旧配置)
+- claude: `/opt/homebrew/bin/claude` → `~/.local/bin/claude`
+
+ChatGPT.app 同梱の codex はそのまま見つかるので、**リンクを作る必要はない**。
+同梱場所は ChatGPT.app の更新で変わることがある(2026-10 に `Resources/codex` から
+`Resources/codex-cli/bin/codex` へ移り、旧版の agent-bridge は codex を見つけられなくなった)。
+委譲が失敗するときは、まず `bridge_doctor` の `codex_bin.exists` / `claude_bin.exists` を見ること。
+
+端末から codex を直接使いたい場合だけ、Homebrew の bin にリンクする(相棒の `codex-code-mode-host` も同じ場所にある):
 
 ```bash
-ln -sf "/Applications/ChatGPT.app/Contents/Resources/codex" /opt/homebrew/bin/codex
+ln -sf "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex" /opt/homebrew/bin/codex
 codex --version
 ```
 
-> 補足: 環境によっては codex の内部ツール実行に使う相棒バイナリ `codex-code-mode-host` も
-> 同じディレクトリに解決しようとする(`codex` シンボリックリンクと同じディレクトリを探す)。
-> `codex exec` 実行時に `failed to spawn code-mode host ...: No such file or directory` が出た場合は、
-> 同様にシンボリックリンクする。
->
-> ```bash
-> ln -sf "/Applications/ChatGPT.app/Contents/Resources/codex-code-mode-host" /opt/homebrew/bin/codex-code-mode-host
-> ```
+**claude への委譲には、コマンド版の Claude Code がログイン済みである必要がある**(デスクトップアプリのログインとは別)。
+ジョブが `OAuth session expired` で失敗したら、端末で次を実行してブラウザでログインする:
+
+```bash
+claude auth login
+```
 
 ### Step 2: ビルドして Claude Code に登録
 
@@ -167,8 +175,8 @@ codex mcp list
 | 変数 | 説明 | デフォルト |
 |---|---|---|
 | `AGENT_BRIDGE_JOBS_DIR` | ジョブの永続化ディレクトリ | `~/.agent-bridge/jobs` |
-| `AGENT_BRIDGE_CLAUDE_BIN` | `claude` バイナリのパス | 環境変数が未設定なら `/opt/homebrew/bin/claude` の存在を確認して使用し、それも無ければ同じ `/opt/homebrew/bin/claude` をハードコードされた最終フォールバックとして使う(結果的に常にこのパスになる) |
-| `AGENT_BRIDGE_CODEX_BIN` | `codex` バイナリのパス | `/opt/homebrew/bin/codex` があればそれ、なければ `/Applications/ChatGPT.app/Contents/Resources/codex`(フォールバック) |
+| `AGENT_BRIDGE_CLAUDE_BIN` | `claude` バイナリのパス | 未設定なら `/opt/homebrew/bin/claude` → `~/.local/bin/claude` の順に、存在するものを使う(`src/index.ts` の `CLAUDE_CANDIDATES`) |
+| `AGENT_BRIDGE_CODEX_BIN` | `codex` バイナリのパス | 未設定なら `/opt/homebrew/bin/codex` → ChatGPT.app 同梱の `codex-cli/bin/codex` → 旧配置の `Resources/codex` の順に、存在するものを使う(`CODEX_CANDIDATES`) |
 | `AGENT_BRIDGE_DEPTH` | 現在の委譲の深さ(通常は自分で設定しない。委譲時にサーバーが `+1` して子プロセスに渡す) | `0` |
 | `AGENT_BRIDGE_TRANSPORT` | 通信方式。セキュリティ上 `stdio` のみ許可。HTTP/SSE等を指定すると起動時にエラー | `stdio` |
 | `AGENT_BRIDGE_MODEL_GUIDE_FILE` | モデル選定ガイドのファイルパス | `~/.agent-bridge/model-guide.md`(無ければ内蔵デフォルト) |
@@ -179,7 +187,7 @@ codex mcp list
 
 - **model未指定 = 各CLIの既定(最高位モデル)で実行**。これは意図的な仕様(既定は安全側=能力優先)。
 - ただしオーケストレータには「ワーカー仕事なら下位/専用モデルで十分か検討し、**どのモデルを使うかユーザーに確認**してから委譲せよ」と指示している。無駄な高位モデル消費を確認一回で防ぐ。
-- ガイドの内容(2026-07-13時点: claude-fable-5/opus-4-8/sonnet-5/haiku-4-5、gpt-5.6-sol/5.6-terra/gpt-image-2)は陳腐化しうるため、オーケストレータは自身の知識と乖離があればユーザーにガイド更新を提案する。
+- ガイドの内容(2026-10-07時点: codex は gpt-6.1-sol(既定)/gpt-6-astra(最上位)/gpt-6-luna(軽量)、claude は claude-fable-5-1/claude-opus-5-5/claude-sonnet-5-5/claude-haiku-4-5、gpt-image-2 は指定禁止)は陳腐化しうるため、オーケストレータは自身の知識と乖離があればユーザーにガイド更新を提案する。codex で選べるモデルの最新一覧は `~/.codex/models_cache.json`(codex が自分で取り直す)で確かめられる。
 - ガイドを差し替えるには `~/.agent-bridge/model-guide.md` を置く(または `AGENT_BRIDGE_MODEL_GUIDE_FILE` でパス指定)。サーバー起動時(=セッション開始時)に読み込まれる。
 
 ## 深さ制限の説明
