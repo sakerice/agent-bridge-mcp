@@ -16,7 +16,7 @@ Claude Code と Codex が互いにタスクを委譲し合えるようにする�
 ## 全体アーキテクチャ
 
 TypeScript + 公式 `@modelcontextprotocol/sdk` によるstdio MCPサーバー1本。
-配置: `/Users/nariiwa/Projects/agent-bridge-mcp`
+配置: `<クローン先>/agent-bridge-mcp`
 
 同一サーバーを両クライアントに登録する:
 
