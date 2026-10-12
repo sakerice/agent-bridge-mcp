@@ -13,6 +13,8 @@ if (oIdx !== -1 && mode === "success") {
 }
 
 if (mode === "sleep") {
+  // 起動できたことをテストに知らせる(固定時間の待機に頼らないため)
+  if (process.env.FAKE_READY_FILE) fs.writeFileSync(process.env.FAKE_READY_FILE, "ready");
   setTimeout(() => process.exit(0), 60_000);
 } else if (mode === "fail") {
   console.error("fake failure: auth expired");

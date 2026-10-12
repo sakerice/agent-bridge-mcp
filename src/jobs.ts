@@ -80,6 +80,8 @@ function pidAlive(pid: number): boolean {
 }
 
 const STALE_GRACE_MS = 5 * 60_000;
+// cancel()がSIGTERMを送る前に書く印。ランナーが結果を書けずに死んだときの判定に使う。
+const CANCEL_REQUESTED_FILE = "cancel-requested";
 
 export class JobManager {
   constructor(private opts: JobManagerOptions) {}
@@ -228,6 +230,12 @@ export class JobManager {
       }
       return { state: "running", exitCode: null };
     }
+    // cancel()がSIGTERMを送ったのにresult.jsonが無い場合は、ランナーが
+    // SIGTERMハンドラを登録する前(Node起動中)に取り消されて即死したもの。
+    // 子プロセスはまだ起動していないので、取り消しとして扱う。
+    if (fs.existsSync(path.join(this.jobDir(id), CANCEL_REQUESTED_FILE))) {
+      return { state: "cancelled", exitCode: null };
+    }
     // ランナーがresult.jsonを書かずに死んだ(クラッシュ等)
     return { state: "failed", exitCode: null };
   }
@@ -272,6 +280,13 @@ export class JobManager {
     if (state !== "running") {
       throw new Error(`ジョブは実行中ではありません(state: ${state})`);
     }
+    // SIGTERMより先に記録する。ランナーが起動中でハンドラが無く
+    // result.jsonを書けずに死んでも、stateOf()がcancelledと判定できる。
+    fs.writeFileSync(
+      path.join(this.jobDir(id), CANCEL_REQUESTED_FILE),
+      new Date().toISOString(),
+      { mode: 0o600 },
+    );
     process.kill(meta.runnerPid, "SIGTERM");
   }
 

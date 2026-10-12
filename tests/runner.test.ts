@@ -64,9 +64,16 @@ describe("runner", () => {
   });
 
   it("SIGTERM で cancelled を記録する", async () => {
-    const jobDir = makeJob({ env: { FAKE_MODE: "sleep" } });
+    const readyFile = path.join(os.tmpdir(), `abm-ready-${process.pid}-${Date.now()}`);
+    const jobDir = makeJob({ env: { FAKE_MODE: "sleep", FAKE_READY_FILE: readyFile } });
     const runner = runRunner(jobDir);
-    await new Promise((r) => setTimeout(r, 500));
+    // 子が起動していれば、ランナーは同じ同期処理の中でSIGTERMハンドラを登録済み。
+    // 固定時間の待機だと負荷の高いときにハンドラ登録前に送ってしまう。
+    const start = Date.now();
+    while (!fs.existsSync(readyFile)) {
+      if (Date.now() - start > 10_000) throw new Error("fake-cli did not start");
+      await new Promise((r) => setTimeout(r, 50));
+    }
     runner.kill("SIGTERM");
     const result = await waitForResult(jobDir);
     expect(result.state).toBe("cancelled");
