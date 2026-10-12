@@ -116,6 +116,25 @@ describe("JobManager", () => {
     }
   });
 
+  it("起動直後(ランナーがSIGTERMハンドラを登録する前)のcancelもcancelledになる", async () => {
+    const m = makeManager();
+    process.env.FAKE_MODE = "sleep";
+    try {
+      const meta = m.delegate({
+        target: "claude",
+        prompt: "x",
+        cwd: os.tmpdir(),
+      });
+      // 待たずに取り消す。Nodeの起動中はハンドラが無く、ランナーは
+      // result.jsonを書かずに即死する。
+      m.cancel(meta.id);
+      const state = await waitForState(m, meta.id);
+      expect(state).toBe("cancelled");
+    } finally {
+      delete process.env.FAKE_MODE;
+    }
+  });
+
   it("depth>=2ではDepthLimitErrorを投げる", () => {
     const m = makeManager(2);
     expect(() =>
