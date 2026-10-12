@@ -1288,8 +1288,8 @@ Expected: `codex-cli 0.144.0-alpha.4` 等が表示される
 - [ ] **Step 2: ビルドしてClaude Codeに登録**
 
 ```bash
-cd /Users/nariiwa/Projects/agent-bridge-mcp && npm run build
-claude mcp add --scope user agent-bridge -- node /Users/nariiwa/Projects/agent-bridge-mcp/dist/index.js
+cd <クローン先>/agent-bridge-mcp && npm run build
+claude mcp add --scope user agent-bridge -- node <クローン先>/agent-bridge-mcp/dist/index.js
 claude mcp list
 ```
 
@@ -1302,7 +1302,7 @@ Expected: `agent-bridge` が一覧に表示される
 ```toml
 [mcp_servers.agent-bridge]
 command = "node"
-args = ["/Users/nariiwa/Projects/agent-bridge-mcp/dist/index.js"]
+args = ["<クローン先>/agent-bridge-mcp/dist/index.js"]
 ```
 
 Run: `codex mcp list`
@@ -1311,7 +1311,7 @@ Expected: `agent-bridge` が表示される
 - [ ] **Step 4: E2E — Claude→Codex委譲**
 
 ```bash
-cd /Users/nariiwa/Projects/agent-bridge-mcp
+cd <クローン先>/agent-bridge-mcp
 claude -p 'agent-bridgeのdelegate_taskツールでcodexに「1+1を計算して答えだけ返して」というタスクを委譲し(cwdはカレントディレクトリ)、job_statusをポーリングして完了したらjob_resultの内容を報告して' --permission-mode acceptEdits
 ```
 
@@ -1320,7 +1320,7 @@ Expected: job_idが発行され、最終的にCodexの回答(「2」を含む)�
 - [ ] **Step 5: E2E — Codex→Claude委譲**
 
 ```bash
-cd /Users/nariiwa/Projects/agent-bridge-mcp
+cd <クローン先>/agent-bridge-mcp
 codex exec --skip-git-repo-check 'Use the agent-bridge delegate_task tool to delegate this task to claude: "1+1を計算して答えだけ返して" (cwd: current directory). Poll job_status until done, then report the job_result content.'
 ```
 
